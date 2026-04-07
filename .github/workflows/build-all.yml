@@ -1,0 +1,75 @@
+name: Build All Skills
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'common/**'
+      - 'languages/**'
+      - 'scripts/**'
+  pull_request:
+    paths:
+      - 'common/**'
+      - 'languages/**'
+  workflow_dispatch:  # ручной запуск
+
+jobs:
+  build-csharp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install pyyaml
+      
+      - name: Build C# skill
+        run: python scripts/build-skill.py csharp
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: csharp-skill
+          path: output/ddd-microservice-csharp.md
+
+  build-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+      
+      - name: Build Go skill
+        run: python scripts/build-skill.py go
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-skill
+          path: output/edm-go.md
+
+  # Опционально: публикация в отдельные репозитории
+  publish-csharp:
+    needs: [build-csharp]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: csharp-skill
+      
+      - name: Push to C# skill repository
+        uses: cpina/github-action-push-to-another-repository@main
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.SKILL_REPO_PAT }}
+        with:
+          source-directory: .
+          destination-github-username: Ekstrem
+          destination-repository-name: ddd-microservice-skill
+          target-branch: main
+          target-directory: SKILL.md

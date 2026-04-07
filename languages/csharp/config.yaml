@@ -1,0 +1,8 @@
+name: "ddd-microservice-csharp"
+description: "Создание микросервисов на C# с DigiTFactory.Libraries, DDD, Event Sourcing, CEQRS"
+output_file: "ddd-microservice-csharp.md"
+language: "C#"
+test_framework: "xUnit"
+build_command: "dotnet build"
+test_command: "dotnet test"
+package_manager: "NuGet"

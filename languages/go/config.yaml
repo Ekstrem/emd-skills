@@ -1,0 +1,8 @@
+name: "edm-go"
+description: "Создание событийно-управляемых микросервисов (EDM) на Go с DigiTFactory.Go.Libraries, DDD, Event Sourcing, CEQRS"
+output_file: "edm-go.md"
+language: "Go"
+test_framework: "testing"
+build_command: "go build ./..."
+test_command: "go test ./... -v"
+package_manager: "go mod"

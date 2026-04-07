@@ -1,0 +1,243 @@
+{
+  "main": {
+    "id": "94facc2dc1825380",
+    "type": "split",
+    "children": [
+      {
+        "id": "c9280f2981c4dd8d",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "37c4a12e799fdf87",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "languages/go/deployment-profiles.md",
+                "mode": "preview",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "deployment-profiles"
+            }
+          },
+          {
+            "id": "1ad79af238e19191",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "README.md",
+                "mode": "preview",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "README"
+            }
+          },
+          {
+            "id": "043160c3f724e394",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "SKILL.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "SKILL"
+            }
+          }
+        ],
+        "currentTab": 2
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "87305e986a52aa84",
+    "type": "split",
+    "children": [
+      {
+        "id": "dea59bc4f65c8651",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "5700f07d45d1b65d",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Файловый менеджер"
+            }
+          },
+          {
+            "id": "e9d300203b3eeb31",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Поиск"
+            }
+          },
+          {
+            "id": "f1603fe37983a3f8",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Закладки"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "42bd7aa4719c38c0",
+    "type": "split",
+    "children": [
+      {
+        "id": "5dbfa1702f3f36b5",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "6776195825d66df3",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "SKILL.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Обратные ссылки для SKILL"
+            }
+          },
+          {
+            "id": "b6ff3acefd65ecc9",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "SKILL.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Исходящие ссылки из SKILL"
+            }
+          },
+          {
+            "id": "7e55bfcf6980b015",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Теги"
+            }
+          },
+          {
+            "id": "f683da64fe03b03e",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "Все свойства"
+            }
+          },
+          {
+            "id": "86b93300d9aae558",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "SKILL.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Структура SKILL"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Меню быстрого перехода": false,
+      "graph:Граф": false,
+      "canvas:Создать новый холст": false,
+      "daily-notes:Сегодняшняя заметка": false,
+      "templates:Вставить шаблон": false,
+      "command-palette:Открыть палитру команд": false,
+      "bases:Создать новую базу": false
+    }
+  },
+  "active": "043160c3f724e394",
+  "lastOpenFiles": [
+    "README.md",
+    "SKILL.md",
+    "common/aggregate-design-canvas.md",
+    "languages/csharp/config.yaml",
+    "languages/csharp/deepseek_yaml_20260407_521014 (1).yaml",
+    "languages/go/config.yaml",
+    "languages/go/deepseek_yaml_20260407_ad8b96.yaml",
+    "scripts/deepseek_python_20260407_345caa.py",
+    "languages/go/readme-template.md",
+    "languages/kotlin/implementation-guide.md",
+    "languages/kotlin/deployment-profiles.md",
+    "languages/kotlin/roadmap.md",
+    "languages/kotlin/integration-tests.md",
+    "common/kubernetes.md",
+    "languages/csharp/roadmap.md",
+    "languages/csharp/implementation-guide.md",
+    "languages/csharp/github-actions.md",
+    "languages/csharp/deployment-profiles.md",
+    "languages/go/deployment-profiles.md",
+    "languages/go/github-actions.md",
+    "languages/go/domain-tests.md",
+    "languages/go/implementation-guide.md",
+    "languages/go/roadmap.md",
+    "common/ceqrs-data-flows.md",
+    "common/command-api.md"
+  ]
+}
