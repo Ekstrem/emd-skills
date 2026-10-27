@@ -6,3 +6,6 @@ test_framework: "xUnit"
 build_command: "dotnet build"
 test_command: "dotnet test"
 package_manager: "NuGet"
+# Опционально: репозиторий, куда публиковать собранный SKILL.md.
+# Если ключ не задан — публикация для этого языка не выполняется.
+publish_repo: "ddd-microservice-skill"

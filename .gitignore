@@ -1,0 +1,6 @@
+# Собранные артефакты (генерируются scripts/build.py и CI)
+output/
+
+# Python
+__pycache__/
+*.pyc

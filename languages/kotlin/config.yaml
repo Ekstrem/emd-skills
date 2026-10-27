@@ -1,0 +1,8 @@
+name: "edm-kotlin"
+description: "Создание событийно-управляемых микросервисов (EDM) на Kotlin/JVM с DigiTFactory.Kotlin.Libraries, DDD, Event Sourcing, CEQRS"
+output_file: "edm-kotlin.md"
+language: "Kotlin/JVM"
+test_framework: "JUnit 5"
+build_command: "gradle build"
+test_command: "gradle test"
+package_manager: "Gradle"

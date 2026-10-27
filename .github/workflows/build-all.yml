@@ -1,75 +1,171 @@
 name: Build All Skills
 
+# Собирает единые SKILL.md-артефакты из common/ + languages/<язык>/.
+# Каждый язык — отдельный артефакт GitHub Actions (скачивается со страницы run).
+# Тег v* дополнительно прикрепляет артефакты к GitHub Release.
+# Push в main опционально публикует SKILL.md в отдельные репозитории скиллов
+# (нужен секрет SKILL_REPO_PAT и ключ publish_repo в config.yaml языка).
+
 on:
   push:
     branches: [main]
+    tags: ['v*']
     paths:
       - 'common/**'
       - 'languages/**'
       - 'scripts/**'
+      - '.github/workflows/**'
   pull_request:
     paths:
       - 'common/**'
       - 'languages/**'
-  workflow_dispatch:  # ручной запуск
+      - 'scripts/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-skills-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-csharp:
+  # Читает конфиги языков и отдаёт матрицу для джобы build.
+  # Матрица строится скриптом, поэтому новый язык не требует правки workflow.
+  discover:
+    name: Discover skills
     runs-on: ubuntu-latest
+    outputs:
+      languages: ${{ steps.matrix.outputs.languages }}
+      publishable: ${{ steps.matrix.outputs.publishable }}
+      has_publishable: ${{ steps.matrix.outputs.has_publishable }}
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      
-      - name: Install dependencies
-        run: pip install pyyaml
-      
-      - name: Build C# skill
-        run: python scripts/build-skill.py csharp
-      
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: csharp-skill
-          path: output/ddd-microservice-csharp.md
+          python-version: '3.12'
 
-  build-go:
+      - name: Validate repository and compute matrix
+        id: matrix
+        run: python scripts/build.py --matrix >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: discover
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.languages) }}
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Python
         uses: actions/setup-python@v5
-      
-      - name: Build Go skill
-        run: python scripts/build-skill.py go
-      
+        with:
+          python-version: '3.12'
+
+      - name: Build skill
+        run: python scripts/build.py "${{ matrix.slug }}"
+
+      - name: Check artifact
+        run: |
+          set -euo pipefail
+          artifact="${{ matrix.path }}"
+          if [ ! -s "$artifact" ]; then
+            echo "::error::артефакт $artifact не создан или пуст"
+            exit 1
+          fi
+          if [ "$(head -n 1 "$artifact")" != "---" ]; then
+            echo "::error::в $artifact нет YAML-заголовка (frontmatter)"
+            exit 1
+          fi
+          if ! grep -qx "name: ${{ matrix.name }}" "$artifact"; then
+            echo "::error::в $artifact нет строки 'name: ${{ matrix.name }}'"
+            exit 1
+          fi
+          echo "### skill-${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- файл: \`$artifact\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- размер: $(wc -c < "$artifact") байт, $(wc -l < "$artifact") строк" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: go-skill
-          path: output/edm-go.md
+          name: skill-${{ matrix.name }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error
+          retention-days: 90
 
-  # Опционально: публикация в отдельные репозитории
-  publish-csharp:
-    needs: [build-csharp]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  # Тег v* → постоянные файлы в GitHub Release (артефакты Actions живут 90 дней).
+  release:
+    name: Release artifacts
+    needs: [discover, build]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          name: csharp-skill
-      
-      - name: Push to C# skill repository
-        uses: cpina/github-action-push-to-another-repository@main
+          python-version: '3.12'
+
+      - name: Build all skills
+        run: python scripts/build.py
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output/*.md
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  # Опционально: публикация собранного SKILL.md в отдельные репозитории скиллов.
+  # Работает только если задан секрет SKILL_REPO_PAT — иначе шаг пропускается.
+  publish:
+    name: Publish ${{ matrix.publish_repo }}
+    needs: [discover, build]
+    if: needs.discover.outputs.has_publishable == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.publishable) }}
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: skill-${{ matrix.name }}
+          path: dist
+
+      - name: Push SKILL.md to skill repository
         env:
-          API_TOKEN_GITHUB: ${{ secrets.SKILL_REPO_PAT }}
-        with:
-          source-directory: .
-          destination-github-username: Ekstrem
-          destination-repository-name: ddd-microservice-skill
-          target-branch: main
-          target-directory: SKILL.md
+          PAT: ${{ secrets.SKILL_REPO_PAT }}
+          OWNER: ${{ github.repository_owner }}
+          TARGET_REPO: ${{ matrix.publish_repo }}
+          SOURCE_FILE: dist/${{ matrix.file }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PAT}" ]; then
+            echo "::notice::секрет SKILL_REPO_PAT не задан — публикация пропущена"
+            exit 0
+          fi
+          work="$(mktemp -d)"
+          git clone --depth 1 "https://x-access-token:${PAT}@github.com/${OWNER}/${TARGET_REPO}.git" "$work/repo"
+          cp "$SOURCE_FILE" "$work/repo/SKILL.md"
+          cd "$work/repo"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SKILL.md
+          if git diff --cached --quiet -- SKILL.md; then
+            echo "SKILL.md не изменился — публикация не нужна"
+            exit 0
+          fi
+          git commit -m "chore: обновлён SKILL.md из ${GITHUB_REPOSITORY}"
+          git push origin HEAD

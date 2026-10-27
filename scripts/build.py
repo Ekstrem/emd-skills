@@ -1,57 +1,450 @@
 #!/usr/bin/env python3
-# scripts/build-skill.py
+"""Сборка SKILL.md-артефактов из общих (common/) и языко-специфичных этапов.
 
-import os
-import yaml
+Что делает:
+  1. Читает конфиг языка `languages/<язык>/config.yaml`.
+  2. Берёт порядок склейки из `scripts/stages.yaml`.
+  3. Склеивает этапы в один markdown-файл с YAML-заголовком (frontmatter).
+  4. Пишет результат в `output/<output_file>`.
+
+Запуск (нужен только Python 3.10+, PyYAML не требуется):
+    python scripts/build.py                  # собрать все языки
+    python scripts/build.py csharp           # собрать один язык
+    python scripts/build.py csharp go        # несколько языков
+    python scripts/build.py --check          # только проверка, без записи файлов
+    python scripts/build.py --matrix         # матрица для GitHub Actions
+
+`--matrix` печатает готовые для $GITHUB_OUTPUT строки:
+    languages=[...]        все языки (для стратегии matrix джобы build)
+    publishable=[...]      языки с `publish_repo` в конфиге
+    has_publishable=true   есть ли что публиковать (пустая matrix ломает job)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
 from pathlib import Path
 
-def build_skill(language: str, config: dict):
-    """Собирает SKILL.md из общих и языко-специфичных этапов"""
-    
-    output = []
-    
-    # 1. Заголовок скилла
-    output.append(f"""---
-name: {config['name']}
-description: "{config['description']}"
----
-""")
-    
-    # 2. Общие этапы (1-5)
-    for stage in sorted(Path('common').glob('*.md')):
-        content = Path(stage).read_text()
-        output.append(f"\n\n<!-- {stage.name} -->\n{content}")
-    
-    # 3. Языко-специфичные этапы (6+)
-    stages_dir = Path(f'languages/{language}/stages')
-    for stage in sorted(stages_dir.glob('*.md')):
-        content = Path(stage).read_text()
-        # Заменяем плейсхолдеры на языко-специфичные
-        content = replace_placeholders(content, config)
-        output.append(f"\n\n<!-- {stage.name} -->\n{content}")
-    
-    # 4. Сохраняем результат
-    output_file = Path(f'output/{config["output_file"]}')
-    output_file.write_text('\n'.join(output))
-    
-    print(f"✅ Generated: {output_file}")
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = Path(__file__).resolve().parent
+STAGES_FILE = SCRIPTS_DIR / "stages.yaml"
+COMMON_DIR = ROOT / "common"
+LANGUAGES_DIR = ROOT / "languages"
+OUTPUT_DIR = ROOT / "output"
 
-def replace_placeholders(content: str, config: dict) -> str:
-    """Заменяет {{language}}, {{test_framework}} и т.д."""
-    replacements = {
-        '{{language}}': config['language'],
-        '{{test_framework}}': config['test_framework'],
-        '{{build_command}}': config['build_command'],
-        '{{test_command}}': config['test_command'],
-        '{{package_manager}}': config['package_manager'],
-    }
-    for k, v in replacements.items():
-        content = content.replace(k, v)
-    return content
+# Имя скилла: строчные латинские буквы, цифры и дефисы.
+NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# Плейсхолдеры сборки: {{language}}, {{build_command}} и т.п.
+# `${{ ... }}` — это выражение GitHub Actions внутри примеров кода в этапах,
+# его трогать нельзя, поэтому `$` перед скобками исключается.
+PLACEHOLDER_RE = re.compile(r"(?<!\$)\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
 
-if __name__ == '__main__':
-    # Загружаем конфиги
-    for lang_config in Path('languages').glob('*/config.yaml'):
-        lang = lang_config.parent.name
-        config = yaml.safe_load(lang_config.read_text())
-        build_skill(lang, config)
+REQUIRED_KEYS = ("name", "description", "output_file")
+BLOCK_SCALARS = ("|", ">", "|-", ">-", "|+", ">+")
+
+
+class BuildError(Exception):
+    """Ошибка сборки: печатается без трейсбека, код возврата 1."""
+
+
+# --------------------------------------------------------------------------
+# Мини-парсер YAML (плоские конфиги)
+# --------------------------------------------------------------------------
+
+def _strip_comment(line: str) -> str:
+    """Отрезает комментарий `#`, не трогая `#` внутри кавычек."""
+    quote: str | None = None
+    for index, char in enumerate(line):
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "#":
+            return line[:index]
+    return line
+
+
+def _parse_scalar(raw: str, where: str) -> str:
+    value = raw.strip()
+    if not value:
+        raise BuildError(f"{where}: пустое значение")
+    if value[0] in "\"'":
+        if len(value) < 2 or value[-1] != value[0]:
+            raise BuildError(f"{where}: незакрытая кавычка в {value!r}")
+        return value[1:-1]
+    return value
+
+
+def _parse_inline_list(raw: str, where: str) -> list[str]:
+    body = raw.strip()
+    if not (body.startswith("[") and body.endswith("]")):
+        raise BuildError(f"{where}: ожидался список вида [a, b] или блок `- элемент`")
+    inner = body[1:-1].strip()
+    if not inner:
+        return []
+    return [_parse_scalar(part, where) for part in inner.split(",")]
+
+
+def load_flat_yaml(path: Path) -> dict[str, object]:
+    """Читает плоский YAML: `ключ: значение`, `ключ: [a, b]`, `ключ:` + `- элемент`.
+
+    Полный YAML сознательно не поддерживается: он нужен только для плоских
+    конфигов, а зависимость от PyYAML ломала бы сборку на чистой машине.
+    Всё, что не вписывается в подмножество, отвергается с понятной ошибкой,
+    чтобы опечатка не дала молчаливо неверный артефакт.
+    """
+    if not path.is_file():
+        raise BuildError(f"не найден файл {path.relative_to(ROOT)}")
+
+    data: dict[str, object] = {}
+    current_key: str | None = None
+
+    for lineno, raw_line in enumerate(
+        path.read_text(encoding="utf-8-sig").splitlines(), 1
+    ):
+        line = _strip_comment(raw_line).rstrip()
+        if not line.strip() or line.strip() == "---":
+            continue
+        where = f"{path.relative_to(ROOT)}:{lineno}"
+
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            if current_key is None or not isinstance(data.get(current_key), list):
+                raise BuildError(f"{where}: элемент списка без ключа")
+            data[current_key].append(_parse_scalar(stripped[2:], where))
+            continue
+
+        if ":" not in stripped:
+            raise BuildError(f"{where}: ожидалось 'ключ: значение'")
+
+        key, _, rest = stripped.partition(":")
+        key = key.strip()
+        rest = rest.strip()
+        if not key:
+            raise BuildError(f"{where}: пустой ключ")
+        if key in data:
+            raise BuildError(f"{where}: повторяющийся ключ '{key}'")
+
+        if rest in BLOCK_SCALARS:
+            raise BuildError(f"{where}: многострочные значения ('{rest}') не поддерживаются")
+        if not rest:
+            data[key] = []
+        elif rest.startswith("["):
+            data[key] = _parse_inline_list(rest, where)
+        else:
+            data[key] = _parse_scalar(rest, where)
+        current_key = key
+
+    return data
+
+
+# --------------------------------------------------------------------------
+# Загрузка конфигов
+# --------------------------------------------------------------------------
+
+def load_manifest() -> dict[str, list[str]]:
+    manifest = load_flat_yaml(STAGES_FILE)
+    for key, value in manifest.items():
+        if not isinstance(value, list):
+            raise BuildError(f"scripts/stages.yaml: '{key}' должен быть списком этапов")
+    if not manifest.get("common"):
+        raise BuildError("scripts/stages.yaml: пустой список 'common'")
+    return manifest  # type: ignore[return-value]
+
+
+def load_languages(manifest: dict[str, list[str]]) -> dict[str, dict[str, object]]:
+    if not LANGUAGES_DIR.is_dir():
+        raise BuildError("не найден каталог languages/")
+
+    configs: dict[str, dict[str, object]] = {}
+    for lang_dir in sorted(p for p in LANGUAGES_DIR.iterdir() if p.is_dir()):
+        config_path = lang_dir / "config.yaml"
+        if not config_path.is_file():
+            print(
+                f"ПРЕДУПРЕЖДЕНИЕ: пропускаю languages/{lang_dir.name} — нет config.yaml",
+                file=sys.stderr,
+            )
+            continue
+        configs[lang_dir.name] = load_flat_yaml(config_path)
+
+    if not configs:
+        raise BuildError("не найдено ни одного languages/*/config.yaml")
+    return configs
+
+
+# --------------------------------------------------------------------------
+# Проверка и сборка
+# --------------------------------------------------------------------------
+
+def _check_unlisted(directory: Path, expected: list[str], manifest_key: str) -> None:
+    actual = {path.stem for path in directory.glob("*.md")}
+    missing = sorted(actual - set(expected))
+    if missing:
+        listed = ", ".join(f"{name}.md" for name in missing)
+        raise BuildError(
+            f"эти файлы не попадут в артефакт: {listed}. "
+            f"Добавьте их в scripts/stages.yaml (ключ '{manifest_key}') или удалите."
+        )
+
+
+def stage_paths(slug: str, manifest: dict[str, list[str]]) -> list[str]:
+    """Возвращает пути этапов в порядке склейки: сначала common, затем язык."""
+    if slug not in manifest:
+        raise BuildError(
+            f"язык '{slug}' не описан в scripts/stages.yaml. "
+            "Добавьте ключ с порядком этапов."
+        )
+
+    common_names = manifest["common"]
+    lang_names = manifest[slug]
+    if not lang_names:
+        raise BuildError(f"scripts/stages.yaml: пустой список этапов для '{slug}'")
+
+    if not COMMON_DIR.is_dir():
+        raise BuildError("не найден каталог common/")
+    if not (LANGUAGES_DIR / slug).is_dir():
+        raise BuildError(f"не найден каталог languages/{slug}/")
+
+    _check_unlisted(COMMON_DIR, common_names, "common")
+    _check_unlisted(LANGUAGES_DIR / slug, lang_names, slug)
+
+    paths: list[str] = []
+    for name in common_names:
+        rel = f"common/{name}.md"
+        if not (ROOT / rel).is_file():
+            raise BuildError(f"scripts/stages.yaml: нет файла {rel}")
+        paths.append(rel)
+    for name in lang_names:
+        rel = f"languages/{slug}/{name}.md"
+        if not (ROOT / rel).is_file():
+            raise BuildError(f"scripts/stages.yaml: нет файла {rel}")
+        paths.append(rel)
+    return paths
+
+
+def _substitute(text: str, config: dict[str, object], where: str) -> str:
+    """Подставляет {{ключ}} из config.yaml. Неизвестный плейсхолдер — ошибка.
+
+    Выражения GitHub Actions (`${{ github.repository }}` и подобные) в примерах
+    кода пропускаются как есть.
+    """
+    scalars = {key: value for key, value in config.items() if isinstance(value, str)}
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key not in scalars:
+            known = ", ".join(sorted(scalars)) or "—"
+            raise BuildError(
+                f"{where}: неизвестный плейсхолдер {{{{{key}}}}}. Доступные ключи: {known}"
+            )
+        return scalars[key]
+
+    return PLACEHOLDER_RE.sub(replace, text)
+
+
+def _read_text(path: Path) -> str:
+    """Читает файл как UTF-8 без BOM и с нормализованными переводами строк.
+
+    Нормализация нужна, чтобы артефакт был побайтово одинаковым при локальной
+    сборке на Windows (CRLF) и в CI на Linux (LF).
+    """
+    text = path.read_text(encoding="utf-8-sig")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def build_text(
+    slug: str, config: dict[str, object], manifest: dict[str, list[str]]
+) -> tuple[str, list[str]]:
+    for key in REQUIRED_KEYS:
+        value = config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise BuildError(
+                f"languages/{slug}/config.yaml: обязательный ключ '{key}' не заполнен"
+            )
+
+    name = str(config["name"]).strip()
+    description = " ".join(str(config["description"]).split())
+
+    if not NAME_RE.match(name):
+        raise BuildError(
+            f"languages/{slug}/config.yaml: name '{name}' должен состоять из строчных "
+            "латинских букв, цифр и дефисов (например, edm-go)"
+        )
+    if not description:
+        raise BuildError(f"languages/{slug}/config.yaml: пустой description")
+
+    output_file = str(config["output_file"]).strip()
+    if Path(output_file).name != output_file or not output_file.endswith(".md"):
+        raise BuildError(
+            f"languages/{slug}/config.yaml: output_file должен быть именем .md-файла "
+            f"без каталогов, получено '{output_file}'"
+        )
+
+    paths = stage_paths(slug, manifest)
+    parts = [
+        "---",
+        f"name: {name}",
+        f"description: {json.dumps(description, ensure_ascii=False)}",
+        "---",
+        "",
+    ]
+    for rel in paths:
+        content = _read_text(ROOT / rel)
+        content = _substitute(content, config, rel).strip("\n")
+        if not content:
+            raise BuildError(f"{rel}: пустой файл")
+        parts.append(f"<!-- source: {rel} -->")
+        parts.append("")
+        parts.append(content)
+        parts.append("")
+
+    return "\n".join(parts).rstrip() + "\n", paths
+
+
+def output_path(config: dict[str, object]) -> Path:
+    return OUTPUT_DIR / str(config["output_file"])
+
+
+def build_one(
+    slug: str,
+    config: dict[str, object],
+    manifest: dict[str, list[str]],
+    check_only: bool,
+) -> tuple[Path, str, list[str]]:
+    text, paths = build_text(slug, config, manifest)
+    target = output_path(config)
+    if not check_only:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8", newline="\n")
+    return target, text, paths
+
+
+def _summary_line(
+    slug: str, target: Path, text: str, paths: list[str], check_only: bool
+) -> str:
+    common_count = sum(1 for p in paths if p.startswith("common/"))
+    lang_count = len(paths) - common_count
+    size_kb = len(text.encode("utf-8")) / 1024
+    lines = text.count("\n")
+    prefix = "проверено" if check_only else "собрано  "
+    return (
+        f"  {prefix} {slug:<8} {len(paths):>2} этапов "
+        f"(common {common_count} + {slug} {lang_count}) "
+        f"→ {target.relative_to(ROOT).as_posix()} "
+        f"[{size_kb:.1f} KB, {lines} строк]"
+    )
+
+
+# --------------------------------------------------------------------------
+# Режим --matrix (для GitHub Actions)
+# --------------------------------------------------------------------------
+
+def matrix_lines(
+    configs: dict[str, dict[str, object]], manifest: dict[str, list[str]]
+) -> list[str]:
+    languages: list[dict[str, str]] = []
+    publishable: list[dict[str, str]] = []
+
+    for slug in sorted(configs):
+        config = configs[slug]
+        build_text(slug, config, manifest)  # валидируем конфиг до запуска джоб
+
+        languages.append(
+            {
+                "slug": slug,
+                "name": str(config["name"]),
+                "path": f"output/{config['output_file']}",
+                "file": str(config["output_file"]),
+            }
+        )
+        publish_repo = str(config.get("publish_repo") or "").strip()
+        if publish_repo:
+            publishable.append(
+                {
+                    "slug": slug,
+                    "name": str(config["name"]),
+                    "file": str(config["output_file"]),
+                    "publish_repo": publish_repo,
+                }
+            )
+
+    def dump(value: object) -> str:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    return [
+        f"languages={dump(languages)}",
+        f"publishable={dump(publishable)}",
+        f"has_publishable={'true' if publishable else 'false'}",
+    ]
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="build.py",
+        description="Собирает единые SKILL.md-артефакты из common/ и languages/<язык>/.",
+    )
+    parser.add_argument(
+        "languages",
+        nargs="*",
+        metavar="ЯЗЫК",
+        help="какие языки собирать (по умолчанию все найденные)",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="только проверить конфиги и этапы, файлы не писать",
+    )
+    parser.add_argument(
+        "--matrix",
+        action="store_true",
+        help="напечатать матрицу для GitHub Actions в формате key=value",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+    args = parse_args(argv)
+
+    try:
+        manifest = load_manifest()
+        configs = load_languages(manifest)
+
+        if args.matrix:
+            for line in matrix_lines(configs, manifest):
+                print(line)
+            return 0
+
+        selected = args.languages or sorted(configs)
+        unknown = [slug for slug in selected if slug not in configs]
+        if unknown:
+            available = ", ".join(sorted(configs))
+            raise BuildError(
+                f"неизвестный язык: {', '.join(unknown)}. Доступные: {available}"
+            )
+
+        print("Сборка SKILL-артефактов" + (" (проверка)" if args.check else ""))
+        for slug in selected:
+            target, text, paths = build_one(slug, configs[slug], manifest, args.check)
+            print(_summary_line(slug, target, text, paths, args.check))
+        return 0
+
+    except BuildError as exc:
+        print(f"ОШИБКА СБОРКИ: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

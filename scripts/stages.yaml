@@ -1,0 +1,37 @@
+# Порядок склейки этапов в единый SKILL.md.
+#
+# common  — этапы, одинаковые для всех языков (склеиваются первыми, по порядку)
+# <язык>  — ключ = имя каталога в languages/<язык>/
+#
+# Правило: каждый .md-файл из common/ и languages/<язык>/ должен быть здесь
+# перечислен. Сборка падает, если файл не указан — иначе контент молча
+# выпадал бы из артефакта.
+
+common:
+  - bounded-context-canvas
+  - aggregate-design-canvas
+  - command-api
+  - query-api
+  - materialized-views
+  - ceqrs-data-flows
+  - kubernetes
+
+csharp:
+  - implementation-guide
+  - deployment-profiles
+  - github-actions
+  - roadmap
+
+go:
+  - implementation-guide
+  - deployment-profiles
+  - github-actions
+  - domain-tests
+  - readme-template
+  - roadmap
+
+kotlin:
+  - implementation-guide
+  - deployment-profiles
+  - integration-tests
+  - roadmap
