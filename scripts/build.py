@@ -5,7 +5,10 @@
   1. Читает конфиг языка `languages/<язык>/config.yaml`.
   2. Берёт порядок склейки из `scripts/stages.yaml`.
   3. Склеивает этапы в один markdown-файл с YAML-заголовком (frontmatter).
-  4. Пишет результат в `output/<output_file>`.
+  4. Собирает пакет навыка (Claude Agent Skills / DSH): каталог
+     `output/skills/<name>/` с `SKILL.md`-роутером и `references/*.md`, плюс
+     `output/skills/<name>.zip` — форма «один каталог верхнего уровня с SKILL.md
+     в корне», которую принимают Claude и DSH.
 
 Запуск (нужен только Python 3.10+, PyYAML не требуется):
     python scripts/build.py                  # собрать все языки
@@ -25,8 +28,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -34,6 +39,12 @@ STAGES_FILE = SCRIPTS_DIR / "stages.yaml"
 COMMON_DIR = ROOT / "common"
 LANGUAGES_DIR = ROOT / "languages"
 OUTPUT_DIR = ROOT / "output"
+SKILLS_DIR = OUTPUT_DIR / "skills"
+
+# Роутер навыка: файл с передним планом (name/description) и ссылками на этапы.
+ROUTER_NAME = "skill.md"
+# Каталог навыков DSH обрезает описание до 500 знаков — длиннее писать бессмысленно.
+DESCRIPTION_MAX = 500
 
 # Имя скилла: строчные латинские буквы, цифры и дефисы.
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -180,8 +191,11 @@ def load_languages(manifest: dict[str, list[str]]) -> dict[str, dict[str, object
 # Проверка и сборка
 # --------------------------------------------------------------------------
 
-def _check_unlisted(directory: Path, expected: list[str], manifest_key: str) -> None:
+def _check_unlisted(
+    directory: Path, expected: list[str], manifest_key: str, exclude: set[str] | None = None
+) -> None:
     actual = {path.stem for path in directory.glob("*.md")}
+    actual -= exclude or set()
     missing = sorted(actual - set(expected))
     if missing:
         listed = ", ".join(f"{name}.md" for name in missing)
@@ -210,7 +224,8 @@ def stage_paths(slug: str, manifest: dict[str, list[str]]) -> list[str]:
         raise BuildError(f"не найден каталог languages/{slug}/")
 
     _check_unlisted(COMMON_DIR, common_names, "common")
-    _check_unlisted(LANGUAGES_DIR / slug, lang_names, slug)
+    # skill.md — роутер пакета навыка, он не является этапом и в артефакт не клеится.
+    _check_unlisted(LANGUAGES_DIR / slug, lang_names, slug, exclude={Path(ROUTER_NAME).stem})
 
     paths: list[str] = []
     for name in common_names:
@@ -309,6 +324,143 @@ def output_path(config: dict[str, object]) -> Path:
     return OUTPUT_DIR / str(config["output_file"])
 
 
+# --------------------------------------------------------------------------
+# Пакет навыка: каталог <name>/SKILL.md + references/*.md и его zip
+# --------------------------------------------------------------------------
+
+REFERENCE_RE = re.compile(r"references/([A-Za-z0-9._-]+\.md)")
+
+
+def _read_frontmatter(path: Path, rel: str) -> tuple[dict[str, str], str]:
+    """Возвращает (поля заголовка, тело) файла навыка."""
+    text = _read_text(path)
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        raise BuildError(f"{rel}: нужен YAML-заголовок (frontmatter) в начале файла")
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        raise BuildError(f"{rel}: заголовок не закрыт строкой '---'") from None
+
+    data: dict[str, str] = {}
+    for number, line in enumerate(lines[1:end], 2):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, separator, value = line.partition(":")
+        if not separator:
+            raise BuildError(f"{rel}:{number}: ожидалось 'ключ: значение'")
+        data[key.strip()] = _parse_scalar(value, f"{rel}:{number}")
+
+    return data, "\n".join(lines[end + 1:]).strip("\n")
+
+
+def build_bundle(
+    slug: str,
+    config: dict[str, object],
+    manifest: dict[str, list[str]],
+    check_only: bool,
+) -> tuple[Path, Path | None, int]:
+    """Собирает пакет навыка: SKILL.md-роутер + references/ + zip.
+
+    Формат пакета совпадает с Claude Agent Skills и DSH: все файлы лежат в одном
+    каталоге верхнего уровня, `SKILL.md` — в его корне.
+    """
+    rel = f"languages/{slug}/{ROUTER_NAME}"
+    router = ROOT / rel
+    if not router.is_file():
+        raise BuildError(
+            f"{rel}: нет роутера навыка. Нужен файл с заголовком name/description "
+            "и ссылками references/*.md — он становится SKILL.md пакета."
+        )
+
+    front, body = _read_frontmatter(router, rel)
+    name = str(config["name"])
+
+    if front.get("name") != name:
+        raise BuildError(
+            f"{rel}: name '{front.get('name')}' не совпадает с name "
+            f"'{name}' в languages/{slug}/config.yaml"
+        )
+    description = " ".join(str(front.get("description", "")).split())
+    if not description:
+        raise BuildError(f"{rel}: пустой description в заголовке")
+    if len(description) > DESCRIPTION_MAX:
+        raise BuildError(
+            f"{rel}: description {len(description)} знаков, а каталог навыков "
+            f"показывает только {DESCRIPTION_MAX} — сократите"
+        )
+
+    stages = stage_paths(slug, manifest)
+    expected = {Path(path).name for path in stages}
+    referenced = set(REFERENCE_RE.findall(body))
+
+    unknown = sorted(referenced - expected)
+    if unknown:
+        raise BuildError(
+            f"{rel}: ссылки на этапы, которых нет в сборке: {', '.join(unknown)}"
+        )
+    unused = sorted(expected - referenced)
+    if unused:
+        raise BuildError(
+            f"{rel}: не упомянуты этапы: {', '.join(unused)}. "
+            "Добавьте строки в маршрут или уберите этапы из scripts/stages.yaml."
+        )
+
+    bundle = SKILLS_DIR / name
+    zip_path = SKILLS_DIR / f"{name}.zip"
+    if check_only:
+        return bundle, None, len(stages)
+
+    if bundle.exists():
+        shutil.rmtree(bundle)
+    (bundle / "references").mkdir(parents=True, exist_ok=True)
+
+    (bundle / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {json.dumps(description, ensure_ascii=False)}\n---\n\n{body}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    for path in stages:
+        content = _substitute(_read_text(ROOT / path), config, path).strip("\n") + "\n"
+        (bundle / "references" / Path(path).name).write_text(
+            content, encoding="utf-8", newline="\n"
+        )
+
+    zip_bundle(name, bundle, zip_path)
+    return bundle, zip_path, len(stages)
+
+
+def zip_bundle(name: str, bundle: Path, target: Path) -> None:
+    """Пакует пакет в <name>.zip: <name>/SKILL.md + <name>/references/*.md.
+
+    Отметки времени фиксированы, чтобы одинаковый вход давал одинаковый zip.
+    """
+    with ZipFile(target, "w", ZIP_DEFLATED) as archive:
+        for path in sorted(bundle.rglob("*")):
+            if not path.is_file():
+                continue
+            arcname = f"{name}/{path.relative_to(bundle).as_posix()}"
+            info = ZipInfo(arcname, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, path.read_bytes())
+
+
+def _bundle_summary(
+    slug: str, bundle: Path, zip_path: Path | None, stages: int, check_only: bool
+) -> str:
+    prefix = "проверен " if check_only else "собран   "
+    target = bundle.relative_to(ROOT).as_posix()
+    if zip_path is None:
+        size = ""
+    else:
+        size = f", {len(zip_path.read_bytes()) / 1024:.1f} KB zip"
+    return (
+        f"  {prefix} {slug:<8} {stages:>2} этапов "
+        f"→ {target}/ ({bundle.name}/SKILL.md + references/){size}"
+    )
+
+
 def build_one(
     slug: str,
     config: dict[str, object],
@@ -359,6 +511,7 @@ def matrix_lines(
                 "name": str(config["name"]),
                 "path": f"output/{config['output_file']}",
                 "file": str(config["output_file"]),
+                "bundle": f"output/skills/{config['name']}.zip",
             }
         )
         publish_repo = str(config.get("publish_repo") or "").strip()
@@ -439,6 +592,10 @@ def main(argv: list[str] | None = None) -> int:
         for slug in selected:
             target, text, paths = build_one(slug, configs[slug], manifest, args.check)
             print(_summary_line(slug, target, text, paths, args.check))
+            bundle, zip_path, stages = build_bundle(
+                slug, configs[slug], manifest, args.check
+            )
+            print(_bundle_summary(slug, bundle, zip_path, stages, args.check))
         return 0
 
     except BuildError as exc:

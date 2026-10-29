@@ -100,6 +100,28 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Check skill package
+        run: |
+          set -euo pipefail
+          bundle="${{ matrix.bundle }}"
+          if [ ! -s "$bundle" ]; then
+            echo "::error::пакет $bundle не создан или пуст"
+            exit 1
+          fi
+          if ! unzip -l "$bundle" | grep -q "${{ matrix.name }}/SKILL.md"; then
+            echo "::error::в $bundle нет ${{ matrix.name }}/SKILL.md в корне"
+            exit 1
+          fi
+          echo "- пакет: \`$bundle\` ($(wc -c < "$bundle") байт, $(unzip -l "$bundle" | tail -1 | awk '{print $2}') файлов)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload skill package
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-${{ matrix.name }}-bundle
+          path: ${{ matrix.bundle }}
+          if-no-files-found: error
+          retention-days: 90
+
   # Тег v* → постоянные файлы в GitHub Release (артефакты Actions живут 90 дней).
   release:
     name: Release artifacts
@@ -122,7 +144,9 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: output/*.md
+          files: |
+            output/*.md
+            output/skills/*.zip
           fail_on_unmatched_files: true
           generate_release_notes: true
           make_latest: true
@@ -153,11 +177,13 @@ jobs:
           body: |
             Собранные скиллы из последнего коммита в `main` (`${{ github.sha }}`).
 
-            Каждый `.md` — самодостаточный скилл: YAML-заголовок (`name`, `description`)
-            и все этапы в порядке склейки.
+            - `<name>.zip` — пакет навыка для Claude и DSH: `<name>/SKILL.md` плюс
+              `<name>/references/*.md` (распаковать в каталог навыков).
+            - `<name>.md` — тот же контент одним файлом: читать глазами или скармливать
+              агенту, который не умеет пакеты навыков.
 
             Версии фиксируются тегами `v*` — они видны в списке релизов рядом.
-          files: dist/*.md
+          files: dist/*
           fail_on_unmatched_files: true
           make_latest: true
 
