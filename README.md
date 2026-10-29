@@ -47,22 +47,24 @@ python scripts/build.py --check  # проверка без записи файл
 | `discover` | push, PR, вручную | читает `languages/*/config.yaml` и строит матрицу языков |
 | `build` | там же | собирает каждый язык отдельной джобой, проверяет артефакт и выкладывает `skill-<name>` |
 | `release` | тег `v*` | прикрепляет собранные `.md` к GitHub Release |
+| `rolling-release` | push в `main` | обновляет релиз `latest` актуальной сборкой (ссылка [`/releases/latest`](https://github.com/Ekstrem/emd-skills/releases/latest) всегда на свежие файлы) |
 | `publish` | push в `main` | кладёт `SKILL.md` в репозиторий из `publish_repo` (нужен секрет `SKILL_REPO_PAT`) |
 
 ## Где скачать скиллы
 
 Собранные скиллы **не лежат в репозитории** — каталог `output/` в `.gitignore`, файлы
-создаёт CI. Забрать их можно из двух мест:
+создаёт CI. Забрать их можно из трёх мест:
 
 | Источник | Где смотреть | Срок жизни |
 |----------|--------------|------------|
-| **GitHub Release** | раздел **Releases** на главной странице репозитория | постоянно |
+| **Latest build** | [`/releases/latest`](https://github.com/Ekstrem/emd-skills/releases/latest) — пересобирается на каждый push в `main` | постоянно |
+| **Версии** `v*` | раздел **Releases** на главной странице репозитория | постоянно |
 | Артефакты прогона | **Actions** → нужный run → блок **Artifacts** внизу страницы | 90 дней |
 
-Релиз создаётся тегом — его и запускает джоба `release`:
+Зафиксировать версию (джоба `release`):
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 Раздел **Packages** здесь не используется: скиллы — это markdown-файлы, а не образы

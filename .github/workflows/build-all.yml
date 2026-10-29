@@ -125,6 +125,41 @@ jobs:
           files: output/*.md
           fail_on_unmatched_files: true
           generate_release_notes: true
+          make_latest: true
+
+  # Пуш в main → «rolling»-релиз: актуальные файлы по постоянной ссылке
+  # releases/latest. Тег latest переиспользуется, поэтому ссылка не меняется,
+  # а сборка в ней — всегда с последнего коммита в main.
+  rolling-release:
+    name: Rolling release (latest)
+    needs: [discover, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all skill artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: skill-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          body: |
+            Собранные скиллы из последнего коммита в `main` (`${{ github.sha }}`).
+
+            Каждый `.md` — самодостаточный скилл: YAML-заголовок (`name`, `description`)
+            и все этапы в порядке склейки.
+
+            Версии фиксируются тегами `v*` — они видны в списке релизов рядом.
+          files: dist/*.md
+          fail_on_unmatched_files: true
+          make_latest: true
 
   # Опционально: публикация собранного SKILL.md в отдельные репозитории скиллов.
   # Работает только если задан секрет SKILL_REPO_PAT — иначе шаг пропускается.
