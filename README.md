@@ -1,5 +1,7 @@
 # emd-skills
 
+[![Build All Skills](https://github.com/Ekstrem/emd-skills/actions/workflows/build-all.yml/badge.svg)](https://github.com/Ekstrem/emd-skills/actions/workflows/build-all.yml)
+
 Навыки (skills) для проектирования событийно-управляемых микросервисов (EDM/CEQRS):
 общие этапы лежат в `common/`, языко-специфичные — в `languages/<язык>/`.
 
@@ -47,7 +49,24 @@ python scripts/build.py --check  # проверка без записи файл
 | `release` | тег `v*` | прикрепляет собранные `.md` к GitHub Release |
 | `publish` | push в `main` | кладёт `SKILL.md` в репозиторий из `publish_repo` (нужен секрет `SKILL_REPO_PAT`) |
 
-Скачать артефакты: вкладка **Actions** → выбранный run → раздел **Artifacts**.
+## Где скачать скиллы
+
+Собранные скиллы **не лежат в репозитории** — каталог `output/` в `.gitignore`, файлы
+создаёт CI. Забрать их можно из двух мест:
+
+| Источник | Где смотреть | Срок жизни |
+|----------|--------------|------------|
+| **GitHub Release** | раздел **Releases** на главной странице репозитория | постоянно |
+| Артефакты прогона | **Actions** → нужный run → блок **Artifacts** внизу страницы | 90 дней |
+
+Релиз создаётся тегом — его и запускает джоба `release`:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Раздел **Packages** здесь не используется: скиллы — это markdown-файлы, а не образы
+или npm-пакеты, поэтому пакетов там не появится.
 
 ## Добавить язык
 
